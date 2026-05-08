@@ -242,6 +242,33 @@ def get_printer_driver(printer_name):
 # Metodos de impresion RAW
 # ============================================================
 
+def _write_printer_fallback(win32print, hPrinter, data):
+    """
+    Escribir datos al printer handle. Intenta bytes primero,
+    si falla con error Unicode prueba con string.
+    Diferentes versiones de pywin32 esperan diferentes tipos.
+    """
+    # Intento 1: bytes
+    try:
+        written = win32print.WritePrinter(hPrinter, data)
+        return written, 'bytes'
+    except Exception as e1:
+        err_str = str(e1)
+        if 'Unicode' in err_str or 'bytes' in err_str or 'string' in err_str.lower():
+            # Intento 2: string (latin-1 para preservar bytes > 127)
+            log('debug', 'WritePrinter rechazo bytes, probando string...')
+            try:
+                if isinstance(data, bytes):
+                    data_str = data.decode('latin-1', errors='replace')
+                else:
+                    data_str = data
+                written = win32print.WritePrinter(hPrinter, data_str)
+                return written, 'string'
+            except Exception as e2:
+                log('debug', 'WritePrinter rechazo string tambien: {}'.format(e2))
+        raise e1
+
+
 def _print_method_a(printer_name, data):
     """
     METODO A: win32print RAW SIN controles de pagina.
@@ -259,10 +286,10 @@ def _print_method_a(printer_name, data):
         # 'RAW' = enviar bytes directos al puerto sin procesar
         docInfo = ('PrinterBridge', None, 'RAW')
         win32print.StartDocPrinter(hPrinter, 1, docInfo)
-        written = win32print.WritePrinter(hPrinter, data)
+        written, data_type = _write_printer_fallback(win32print, hPrinter, data)
         win32print.EndDocPrinter(hPrinter)
-        log('info', 'Metodo A OK - {} bytes escritos'.format(written))
-        return {'method': 'A', 'success': True, 'bytes_written': written}
+        log('info', 'Metodo A OK - {} bytes escritos ({})'.format(written, data_type))
+        return {'method': 'A', 'success': True, 'bytes_written': written, 'data_type': data_type}
     except Exception as e:
         return {'method': 'A', 'success': False, 'error': str(e)}
     finally:
@@ -291,9 +318,9 @@ def _print_method_b(printer_name, data):
         try:
             win32print.StartPagePrinter(hPrinter)
             try:
-                written = win32print.WritePrinter(hPrinter, data)
-                log('info', 'Metodo B OK - {} bytes escritos'.format(written))
-                return {'method': 'B', 'success': True, 'bytes_written': written}
+                written, data_type = _write_printer_fallback(win32print, hPrinter, data)
+                log('info', 'Metodo B OK - {} bytes escritos ({})'.format(written, data_type))
+                return {'method': 'B', 'success': True, 'bytes_written': written, 'data_type': data_type}
             finally:
                 try:
                     win32print.EndPagePrinter(hPrinter)
