@@ -881,7 +881,7 @@ def generate_dashboard():
       <div class="row">
         <div>
           <label>IP directa de la impresora (TCP port 9100)</label>
-          <input type="text" id="printerIP" placeholder="ej: 192.168.0.50 (opcional)" value="""json.dumps(printer_ip) + """>
+          <input type="text" id="printerIP" placeholder="ej: 192.168.0.50 (opcional)" value=\"""" + json.dumps(printer_ip) + """\">
         </div>
         <div>
           <label>Metodo de impresion</label>
