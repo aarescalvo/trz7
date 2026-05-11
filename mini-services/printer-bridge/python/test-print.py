@@ -1,16 +1,48 @@
 # -*- coding: utf-8 -*-
-"""Test de impresion directa - PASSTHROUGH via ctypes"""
+"""Test de impresion PASSTHROUGH - DPL completo del sistema viejo de trazabilidad"""
 import ctypes
 import struct
+import time
 
 PRINTER_NAME = 'Datamax M-4206 Mark II'
-
-# DPL de prueba
-DPL_DATA = b'n\r\nH0080o0030\r\nf220\r\n1f100\r\nc0000\r\n1911005000100TEST OK\r\nQ0001\r\nE\r\n'
-
 PASSTHROUGH = 4105
 
-# Definir DOCINFOW manualmente
+# DPL del sistema viejo (formato original con <STX>/<SI> como separadores)
+# Del archivo EtiHac.trz del sistema de trazabilidad
+DPL_VIEJO = (
+    "<STX><SI>$<SI>\r\n"
+    "<SI>H0080o0030<SI>\r\n"
+    "<SI>f220<SI>\r\n"
+    "<SI>1f100<SI>\r\n"
+    "<SI>H0100o0140<SI>\r\n"
+    "<SI>f250<SI>\r\n"
+    "<SI>1f100<SI>\r\n"
+    "<SI>c0000<SI>\r\n"
+    "<SI>1911005000100TEST OK<SI>\r\n"
+    "<SI>H0080o0030<SI>\r\n"
+    "<SI>1e10006001220065\r\n"
+    "<SI>1b31002240065\r\n"
+    "<SI>ySE1<SI>\r\n"
+    "<SI>1911005000100SOLEMAR ALIMENTARIA<SI>\r\n"
+    "<SI>1911005000120** PRUEBA BRIDGE **<SI>\r\n"
+    "<SI>Q0001<SI>\r\n"
+    "<SI>E<SI>\r\n"
+).encode('latin-1')
+
+# DPL alternativo simple
+DPL_SIMPLE = b'n\r\nM1084\r\nO0220\r\nSO\r\nd\r\nL\r\nD11\r\nPO\r\npG\r\nSO\r\nA2\r\n1e8406900410065Ccb\r\nySE1\r\n1911A1200220110SOLEMAR ALIMENTARIA\r\n1911A1200550110** PRUEBA **\r\n1911A1200880110Printer Bridge v3.1\r\n1911A1201210110Datamax Mark II\r\nQ0001\r\nE\r\n'
+
+# DPL minimal para probar que la impresora imprime ALGO
+DPL_MINIMAL = (
+    "H0080o0030\r\n"
+    "f220\r\n"
+    "1f100\r\n"
+    "c0000\r\n"
+    "1911005000100HOLA SOLEMAR\r\n"
+    "Q0001\r\n"
+    "E\r\n"
+).encode('latin-1')
+
 class DOCINFOW(ctypes.Structure):
     _fields_ = [
         ('cbSize', ctypes.c_int),
@@ -20,62 +52,54 @@ class DOCINFOW(ctypes.Structure):
         ('fwType', ctypes.c_ulong),
     ]
 
-print('Creando DC para: ' + PRINTER_NAME)
-hdc = ctypes.windll.gdi32.CreateDCW(
-    'winspool',          # driver
-    PRINTER_NAME,        # device name
-    None,                # output file
-    None                 # init data
-)
+def send_passthrough(printer_name, data):
+    """Enviar datos RAW a la impresora via PASSTHROUGH."""
+    hdc = ctypes.windll.gdi32.CreateDCW('winspool', printer_name, None, None)
+    if not hdc:
+        print('ERROR: No se pudo crear DC para: ' + printer_name)
+        return False
 
-if not hdc:
-    print('ERROR: No se pudo crear DC. Asegurate que la impresora esta instalada.')
-    exit(1)
+    doc = DOCINFOW()
+    doc.cbSize = ctypes.sizeof(DOCINFOW)
+    doc.lpszDocName = 'DPL'
+    doc.lpszDatatype = 'RAW'
 
-print('DC creado OK:', hdc)
+    ctypes.windll.gdi32.StartDocW(hdc, ctypes.byref(doc))
+    ctypes.windll.gdi32.StartPage(hdc)
 
-# Iniciar documento
-doc = DOCINFOW()
-doc.cbSize = ctypes.sizeof(DOCINFOW)
-doc.lpszDocName = 'DPL Test'
-doc.lpszDatatype = 'RAW'
+    buf = struct.pack('<I', len(data)) + data
+    ret = ctypes.windll.gdi32.ExtEscape(
+        hdc, PASSTHROUGH, len(buf), buf, 0, None
+    )
 
-print('Iniciando StartDoc...')
-ret = ctypes.windll.gdi32.StartDocW(hdc, ctypes.byref(doc))
-print('StartDoc:', ret)
+    ctypes.windll.gdi32.EndPage(hdc)
+    ctypes.windll.gdi32.EndDoc(hdc)
+    ctypes.windll.gdi32.DeleteDC(hdc)
 
-print('Iniciando StartPage...')
-ret = ctypes.windll.gdi32.StartPage(hdc)
-print('StartPage:', ret)
+    return ret > 0
 
-# Preparar buffer PASSTHROUGH: 4 bytes (longitud) + datos
-buf_size = 4 + len(DPL_DATA)
-buf = ctypes.create_string_buffer(buf_size)
-# Escribir longitud como little-endian uint32
-struct.pack_into('<I', buf, 0, len(DPL_DATA))
-# Copiar datos despues de los 4 bytes
-buf.raw = struct.pack('<I', len(DPL_DATA)) + DPL_DATA
+# Ejecutar pruebas
+print('=' * 50)
+print('TEST PASSTHROUGH - Datamax M-4206 Mark II')
+print('=' * 50)
 
-print('Enviando ExtEscape PASSTHROUGH ({} bytes)...'.format(len(DPL_DATA)))
-ret = ctypes.windll.gdi32.ExtEscapeA(
-    hdc,
-    PASSTHROUGH,    # escape code
-    buf_size,       # input size
-    buf,            # input buffer
-    0,              # output size
-    None            # output buffer
-)
-print('ExtEscape retorno:', ret)
-print('(>0 = datos enviados, 0 = no soportado, <0 = error)')
+tests = [
+    ('VIEJO (sistema trazabilidad)', DPL_VIEJO),
+    ('SIMPLE (formato DPL)', DPL_SIMPLE),
+    ('MINIMAL (basico)', DPL_MINIMAL),
+]
 
-print('EndPage...')
-ctypes.windll.gdi32.EndPage(hdc)
-
-print('EndDoc...')
-ctypes.windll.gdi32.EndDoc(hdc)
-
-print('DeleteDC...')
-ctypes.windll.gdi32.DeleteDC(hdc)
+for name, dpl in tests:
+    print('')
+    print('--- Test: {} ({} bytes) ---'.format(name, len(dpl)))
+    print('Contenido:')
+    print(repr(dpl[:200]))
+    print('...')
+    ok = send_passthrough(PRINTER_NAME, dpl)
+    print('Resultado:', 'ENVIADO OK' if ok else 'FALLO')
+    time.sleep(3)  # Pausa entre impresiones
 
 print('')
-print('LISTO. Fijate si la impresora reacciono.')
+print('=' * 50)
+print('FIN. Revisa la impresora - deberian haber salido 3 rotulos.')
+print('Contame cual de los 3 salio con texto visible.')
